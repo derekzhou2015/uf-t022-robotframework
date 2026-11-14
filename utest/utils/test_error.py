@@ -92,6 +92,61 @@ class TestGetErrorDetails(unittest.TestCase):
             assert_equal(ErrorDetails(err).traceback, format_traceback(no_tb=True))
 
 
+class TestCyclicAndDeepExceptionChains(unittest.TestCase):
+
+    def test_cyclic_cause(self):
+        error = RuntimeError("boom")
+        error.__cause__ = error
+        details = ErrorDetails(error)
+        assert_equal(details.message, "boom")
+        assert_true("RuntimeError: boom" in details.traceback)
+
+    def test_cyclic_context(self):
+        error = RuntimeError("boom")
+        error.__context__ = error
+        details = ErrorDetails(error)
+        assert_equal(details.message, "boom")
+        assert_true("RuntimeError: boom" in details.traceback)
+
+    def test_mutually_cyclic_causes(self):
+        error1 = ValueError("first")
+        error2 = TypeError("second")
+        error1.__cause__ = error2
+        error2.__cause__ = error1
+        details = ErrorDetails(error1)
+        assert_equal(details.message, "ValueError: first")
+        assert_true("ValueError: first" in details.traceback)
+        assert_true("TypeError: second" in details.traceback)
+
+    def test_cyclic_chain_is_marked_truncated(self):
+        error = RuntimeError("boom")
+        error.__cause__ = error
+        assert_true("cyclic exception chain truncated" in ErrorDetails(error).traceback)
+
+    def test_deep_chain_does_not_crash(self):
+        errors = [RuntimeError(f"error {i}") for i in range(2000)]
+        for i in range(len(errors) - 1):
+            errors[i].__cause__ = errors[i + 1]
+        details = ErrorDetails(errors[0])
+        assert_equal(details.message, "error 0")
+        assert_true("RuntimeError: error 0" in details.traceback)
+
+    def test_deep_chain_is_safely_truncated(self):
+        errors = [RuntimeError(f"error {i}") for i in range(2000)]
+        for i in range(len(errors) - 1):
+            errors[i].__cause__ = errors[i + 1]
+        tb = ErrorDetails(errors[0]).traceback
+        assert_true("too deep exception chain truncated" in tb)
+
+    def test_deep_context_chain(self):
+        errors = [RuntimeError(f"error {i}") for i in range(2000)]
+        for i in range(len(errors) - 1):
+            errors[i].__context__ = errors[i + 1]
+        details = ErrorDetails(errors[0])
+        assert_equal(details.message, "error 0")
+        assert_true("RuntimeError: error 0" in details.traceback)
+
+
 class TestRemoveRobotEntriesFromTraceback(unittest.TestCase):
 
     def test_both_robot_and_non_robot_entries(self):

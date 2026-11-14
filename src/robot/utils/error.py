@@ -84,20 +84,45 @@ class ErrorDetails:
             return ""
         if isinstance(error, RobotError):
             return error.details
-        if self._exclude_robot_traces:
-            self._remove_robot_traces(error)
+        self._sanitize_exception_chain(error)
         lines = self._get_traceback_lines(type(error), error, error.__traceback__)
         return "".join(lines).rstrip()
+
+    def _sanitize_exception_chain(self, error):
+        # Traverse the chain iteratively. A recursive traversal would exhaust
+        # the stack with cyclic or very deep chains, and such chains would
+        # crash `traceback.format_exception` as well. Cycles are cut and too
+        # deep chains truncated to keep formatting safe.
+        max_depth = max(sys.getrecursionlimit() // 10, 100)
+        seen = {id(error)}
+        stack = [(error, 0)]
+        while stack:
+            err, depth = stack.pop()
+            if self._exclude_robot_traces:
+                self._remove_robot_traces(err)
+            for name in ("__context__", "__cause__"):
+                chained = getattr(err, name)
+                if chained is None:
+                    continue
+                if id(chained) in seen:
+                    self._cut_chain(err, name, "cyclic")
+                elif depth >= max_depth:
+                    self._cut_chain(err, name, "too deep")
+                else:
+                    seen.add(id(chained))
+                    stack.append((chained, depth + 1))
+
+    def _cut_chain(self, err, name, reason):
+        setattr(err, name, None)
+        add_note = getattr(err, "add_note", None)  # Python 3.11+
+        if add_note:
+            add_note(f"Robot Framework: {reason} exception chain truncated.")
 
     def _remove_robot_traces(self, error):
         tb = error.__traceback__
         while tb and self._is_robot_traceback(tb):
             tb = tb.tb_next
         error.__traceback__ = tb
-        if error.__context__:
-            self._remove_robot_traces(error.__context__)
-        if error.__cause__:
-            self._remove_robot_traces(error.__cause__)
 
     def _is_robot_traceback(self, tb):
         module = tb.tb_frame.f_globals.get("__name__")
